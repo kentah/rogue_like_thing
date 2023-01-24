@@ -118,7 +118,7 @@ fn draw_tooltips(ecs: &World, ctx: &mut Rltk) {
             let mut y = mouse_pos.1;
             for s in tooltip.iter() {
                 ctx.print_color(
-                    arrow_pos.x,
+                    left_x + 1,
                     arrow_pos.y,
                     RGB::named(rltk::WHITE),
                     RGB::named(rltk::GREY),
@@ -135,14 +135,14 @@ fn draw_tooltips(ecs: &World, ctx: &mut Rltk) {
                     );
                 }
                 y += 1;
-                ctx.print_color(
-                    arrow_pos.x,
-                    arrow_pos.y,
-                    RGB::named(rltk::WHITE),
-                    RGB::named(rltk::GREY),
-                    &"<-".to_string(),
-                );
             }
+            ctx.print_color(
+                arrow_pos.x,
+                arrow_pos.y,
+                RGB::named(rltk::WHITE),
+                RGB::named(rltk::GREY),
+                &"<-".to_string(),
+            );
         }
     }
 }
