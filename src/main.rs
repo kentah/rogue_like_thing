@@ -4,6 +4,8 @@ use specs::prelude::*;
 
 mod components;
 mod damage_system;
+mod gamelog;
+mod gui;
 mod map;
 mod map_indexing_system;
 mod melee_combat_system;
@@ -95,14 +97,16 @@ impl GameState for State {
                 ctx.set(pos.x, pos.y, render.fg, render.bg, render.glyph);
             }
         }
+        gui::draw_ui(&self.ecs, ctx);
     }
 }
 
 fn main() -> rltk::BError {
     use rltk::RltkBuilder;
-    let context = RltkBuilder::simple80x50()
-        .with_title("Roguelike Tutorial")
+    let mut context = RltkBuilder::simple80x50()
+        .with_title("Boring Dungeon")
         .build()?;
+    context.with_post_scanlines(true);
 
     let mut gs = State { ecs: World::new() };
     gs.ecs.register::<Position>();
@@ -197,6 +201,9 @@ fn main() -> rltk::BError {
     gs.ecs.insert(map);
     gs.ecs.insert(Point::new(player_x, player_y));
     gs.ecs.insert(RunState::PreRun);
+    gs.ecs.insert(gamelog::GameLog {
+        entries: vec!["Welcome to Boring Dungeon".to_string()],
+    });
 
     rltk::main_loop(context, gs)
 }
