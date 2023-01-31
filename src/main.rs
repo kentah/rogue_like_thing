@@ -1,4 +1,4 @@
-use rltk::{GameState, Point, Rltk, RGB};
+use rltk::{GameState, Point, Rltk};
 use specs::prelude::*;
 //use std::cmp::{max, min};
 
@@ -6,19 +6,22 @@ mod components;
 mod damage_system;
 mod gamelog;
 mod gui;
+mod inventory_system;
 mod map;
 mod map_indexing_system;
 mod melee_combat_system;
 mod monster_ai_system;
 mod player;
 mod rect;
+mod spawner;
 mod visibility_system;
 
 use components::*;
-use damage_system::*;
+use damage_system::DamageSystem;
+use inventory_system::{ItemCollectionSystem, ItemDropSystem, ItemUseSystem};
 use map::*;
 use map_indexing_system::MapIndexingSystem;
-use melee_combat_system::*;
+use melee_combat_system::MeleeCombatSystem;
 use monster_ai_system::MonsterAI;
 use player::*;
 use rect::Rect;
@@ -30,6 +33,9 @@ pub enum RunState {
     PreRun,
     PlayerTurn,
     MonsterTurn,
+    ShowInventory,
+    ShowDropItem,
+    ShowTargeting { range: i32, item: Entity },
 }
 
 pub struct State {
@@ -48,6 +54,12 @@ impl State {
         melee.run_now(&self.ecs);
         let mut damage = DamageSystem {};
         damage.run_now(&self.ecs);
+        let mut pickup = ItemCollectionSystem {};
+        pickup.run_now(&self.ecs);
+        let mut itemuse = ItemUseSystem {};
+        itemuse.run_now(&self.ecs);
+        let mut drop_items = ItemDropSystem {};
+        drop_items.run_now(&self.ecs);
         self.ecs.maintain();
     }
 }
@@ -64,6 +76,7 @@ impl GameState for State {
         match newrunstate {
             RunState::PreRun => {
                 self.run_systems();
+                self.ecs.maintain();
                 newrunstate = RunState::AwaitingInput;
             }
             RunState::AwaitingInput => {
@@ -72,11 +85,81 @@ impl GameState for State {
             }
             RunState::PlayerTurn => {
                 self.run_systems();
+                self.ecs.maintain();
                 newrunstate = RunState::MonsterTurn;
             }
             RunState::MonsterTurn => {
                 self.run_systems();
+                self.ecs.maintain();
                 newrunstate = RunState::AwaitingInput;
+            }
+            RunState::ShowInventory => {
+                let result = gui::show_inventory(self, ctx);
+                match result.0 {
+                    gui::ItemMenuResult::Cancel => newrunstate = RunState::AwaitingInput,
+                    gui::ItemMenuResult::NoResponse => {}
+                    gui::ItemMenuResult::Selected => {
+                        let item_entity = result.1.unwrap();
+                        let is_ranged = self.ecs.read_storage::<Ranged>();
+                        let is_item_ranged = is_ranged.get(item_entity);
+                        if let Some(is_item_ranged) = is_item_ranged {
+                            newrunstate = RunState::ShowTargeting {
+                                range: is_item_ranged.range,
+                                item: item_entity,
+                            }
+                        } else {
+                            let mut intent = self.ecs.write_storage::<WantsToUseItem>();
+                            intent
+                                .insert(
+                                    *self.ecs.fetch::<Entity>(),
+                                    WantsToUseItem {
+                                        item: item_entity,
+                                        target: None,
+                                    },
+                                )
+                                .expect("Unable to insert intent");
+                            newrunstate = RunState::PlayerTurn;
+                        }
+                    }
+                }
+            }
+            RunState::ShowDropItem => {
+                let result = gui::drop_item_menue(self, ctx);
+                match result.0 {
+                    gui::ItemMenuResult::Cancel => newrunstate = RunState::AwaitingInput,
+                    gui::ItemMenuResult::NoResponse => {}
+                    gui::ItemMenuResult::Selected => {
+                        let item_entity = result.1.unwrap();
+                        let mut intent = self.ecs.write_storage::<WantsToDropItem>();
+                        intent
+                            .insert(
+                                *self.ecs.fetch::<Entity>(),
+                                WantsToDropItem { item: item_entity },
+                            )
+                            .expect("Unable to insert intent");
+                        newrunstate = RunState::PlayerTurn;
+                    }
+                }
+            }
+            RunState::ShowTargeting { range, item } => {
+                let result = gui::ranged_target(self, ctx, range);
+                match result.0 {
+                    gui::ItemMenuResult::Cancel => newrunstate = RunState::AwaitingInput,
+                    gui::ItemMenuResult::NoResponse => {}
+                    gui::ItemMenuResult::Selected => {
+                        let mut intent = self.ecs.write_storage::<WantsToUseItem>();
+                        intent
+                            .insert(
+                                *self.ecs.fetch::<Entity>(),
+                                WantsToUseItem {
+                                    item,
+                                    target: result.1,
+                                },
+                            )
+                            .expect("Unable to insert intent");
+                        newrunstate = RunState::PlayerTurn;
+                    }
+                }
             }
         }
 
@@ -91,12 +174,15 @@ impl GameState for State {
         let renderables = self.ecs.read_storage::<Renderable>();
         let map = self.ecs.fetch::<Map>();
 
-        for (pos, render) in (&positions, &renderables).join() {
+        let mut data = (&positions, &renderables).join().collect::<Vec<_>>();
+        data.sort_by(|&a, &b| b.1.render_order.cmp(&a.1.render_order));
+        for (pos, render) in data.iter() {
             let idx = map.xy_idx(pos.x, pos.y);
             if map.visible_tiles[idx] {
                 ctx.set(pos.x, pos.y, render.fg, render.bg, render.glyph);
             }
         }
+
         gui::draw_ui(&self.ecs, ctx);
     }
 }
@@ -109,6 +195,7 @@ fn main() -> rltk::BError {
     context.with_post_scanlines(true);
 
     let mut gs = State { ecs: World::new() };
+
     gs.ecs.register::<Position>();
     gs.ecs.register::<Renderable>();
     gs.ecs.register::<Player>();
@@ -119,87 +206,32 @@ fn main() -> rltk::BError {
     gs.ecs.register::<CombatStats>();
     gs.ecs.register::<WantsToMelee>();
     gs.ecs.register::<SufferDamage>();
+    gs.ecs.register::<Item>();
+    gs.ecs.register::<ProvidesHealing>();
+    gs.ecs.register::<InflictsDamage>();
+    gs.ecs.register::<AreaEffect>();
+    gs.ecs.register::<Consumable>();
+    gs.ecs.register::<Ranged>();
+    gs.ecs.register::<InBackpack>();
+    gs.ecs.register::<WantsToPickupItem>();
+    gs.ecs.register::<WantsToUseItem>();
+    gs.ecs.register::<WantsToDropItem>();
+    gs.ecs.register::<Confusion>();
 
     let map: Map = Map::new_map_rooms_and_corridors();
     let (player_x, player_y) = map.rooms[0].center();
 
-    let player_entity = gs
-        .ecs
-        .create_entity()
-        .with(Position {
-            x: player_x,
-            y: player_y,
-        })
-        .with(Renderable {
-            glyph: rltk::to_cp437('@'),
-            fg: RGB::named(rltk::YELLOW),
-            bg: RGB::named(rltk::BLACK),
-        })
-        .with(Player {})
-        .with(Viewshed {
-            visible_tiles: Vec::new(),
-            range: 8,
-            dirty: true,
-        })
-        .with(Name {
-            name: "Player".to_string(),
-        })
-        .with(CombatStats {
-            max_hp: 30,
-            hp: 30,
-            defence: 2,
-            power: 5,
-        })
-        .build();
+    //let mut rng = rltk::RandomNumberGenerator::new();
+    let player_entity = spawner::player(&mut gs.ecs, player_x, player_y);
 
-    gs.ecs.insert(player_entity);
-
-    let mut rng = rltk::RandomNumberGenerator::new();
-    for (i, room) in map.rooms.iter().skip(1).enumerate() {
-        let (x, y) = room.center();
-
-        let glyph: rltk::FontCharType;
-        let name: String;
-        let roll = rng.roll_dice(1, 2);
-        match roll {
-            1 => {
-                glyph = rltk::to_cp437('g');
-                name = "Goblin".to_string()
-            }
-            _ => {
-                glyph = rltk::to_cp437('o');
-                name = "Orc".to_string()
-            }
-        }
-        gs.ecs
-            .create_entity()
-            .with(Position { x, y })
-            .with(Renderable {
-                glyph: glyph,
-                fg: RGB::named(rltk::RED),
-                bg: RGB::named(rltk::BLACK),
-            })
-            .with(Viewshed {
-                visible_tiles: Vec::new(),
-                range: 8,
-                dirty: true,
-            })
-            .with(Monster {})
-            .with(Name {
-                name: format!("{} #{}", &name, i),
-            })
-            .with(BlocksTile {})
-            .with(CombatStats {
-                max_hp: 16,
-                hp: 16,
-                defence: 1,
-                power: 4,
-            })
-            .build();
+    gs.ecs.insert(rltk::RandomNumberGenerator::new());
+    for room in map.rooms.iter().skip(1) {
+        spawner::spawn_room(&mut gs.ecs, room);
     }
 
     gs.ecs.insert(map);
     gs.ecs.insert(Point::new(player_x, player_y));
+    gs.ecs.insert(player_entity);
     gs.ecs.insert(RunState::PreRun);
     gs.ecs.insert(gamelog::GameLog {
         entries: vec!["Welcome to Boring Dungeon".to_string()],

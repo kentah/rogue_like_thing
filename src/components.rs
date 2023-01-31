@@ -2,7 +2,7 @@ use rltk::{self, RGB};
 use specs::prelude::*;
 use specs_derive::*;
 
-#[derive(Component)]
+#[derive(Component, Debug)]
 pub struct Position {
     pub x: i32,
     pub y: i32,
@@ -13,6 +13,7 @@ pub struct Renderable {
     pub glyph: rltk::FontCharType,
     pub fg: RGB,
     pub bg: RGB,
+    pub render_order: i32,
 }
 
 #[derive(Component, Debug)]
@@ -66,3 +67,66 @@ impl SufferDamage {
         }
     }
 }
+
+#[derive(Component, Debug)]
+pub struct Item {}
+
+#[derive(Component, Clone, Debug)]
+pub struct Consumable {}
+
+#[derive(Debug, Component)]
+pub struct Ranged {
+    pub range: i32,
+}
+
+#[derive(Debug, Component)]
+pub struct InflictsDamage {
+    pub damage: i32,
+}
+
+#[derive(Debug, Component)]
+pub struct AreaEffect {
+    pub radius: i32,
+}
+
+#[derive(Debug, Component)]
+pub struct Confusion {
+    pub turns: i32,
+}
+
+#[derive(Component, Clone, Debug)]
+pub struct ProvidesHealing {
+    pub heal_amount: i32,
+}
+
+#[derive(Component, Debug)]
+pub struct InBackpack {
+    pub owner: Entity,
+}
+
+/// Make the ability to pick up items generic by way of intent
+#[derive(Component, Debug)]
+pub struct WantsToPickupItem {
+    pub collected_by: Entity,
+    pub item: Entity,
+}
+
+#[derive(Component, Debug)]
+pub struct WantsToUseItem {
+    pub item: Entity,
+    pub target: Option<rltk::Point>,
+}
+//#[derive(Component, Debug)]
+//pub struct WantsToDrinkPotion {
+//    pub potion: Entity,
+//}
+
+#[derive(Component, Clone, Debug)]
+pub struct WantsToDropItem {
+    pub item: Entity,
+}
+
+//#[derive(Component, Debug)]
+//pub struct Potion {
+//    pub heal_amount: i32,
+//}
