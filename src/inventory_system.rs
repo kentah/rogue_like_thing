@@ -1,5 +1,5 @@
 use super::{
-    gamelog::GameLog, AreaEffect, CombatStats, Confusion, Consumable, InBackpack, InflictsDamage,
+    gamelog::GameLog, AreaOfEffect, CombatStats, Confusion, Consumable, InBackpack, InflictsDamage,
     Map, Name, Position, ProvidesHealing, SufferDamage, WantsToDropItem, WantsToPickupItem,
     WantsToUseItem,
 };
@@ -61,7 +61,7 @@ impl<'a> System<'a> for ItemUseSystem {
         ReadStorage<'a, InflictsDamage>,
         WriteStorage<'a, CombatStats>,
         WriteStorage<'a, SufferDamage>,
-        ReadStorage<'a, AreaEffect>,
+        ReadStorage<'a, AreaOfEffect>,
         WriteStorage<'a, Confusion>,
     );
 
