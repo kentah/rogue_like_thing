@@ -49,7 +49,7 @@ pub struct BlocksTile {}
 pub struct CombatStats {
     pub max_hp: i32,
     pub hp: i32,
-    pub defence: i32,
+    pub defense: i32,
     pub power: i32,
 }
 
@@ -140,4 +140,36 @@ pub struct SerializeMe;
 #[derive(Component, Clone, Debug, Serialize, Deserialize)]
 pub struct SerializationHelper {
     pub map: super::map::Map,
+}
+
+#[derive(PartialEq, Clone, Copy, Serialize, Deserialize)]
+pub enum EquipmentSlot {
+    Melee,
+    Shield,
+}
+
+#[derive(Component, Clone, Serialize, Deserialize)]
+pub struct Equippable {
+    pub slot: EquipmentSlot,
+}
+
+#[derive(Component, ConvertSaveload, Clone)]
+pub struct Equipped {
+    pub owner: Entity,
+    pub slot: EquipmentSlot,
+}
+
+#[derive(Component, Clone, Serialize, Deserialize)]
+pub struct MeleePowerBonus {
+    pub power: i32,
+}
+
+#[derive(Component, Clone, Serialize, Deserialize)]
+pub struct DefenseBonus {
+    pub defense: i32,
+}
+
+#[derive(Component, Clone, ConvertSaveload)]
+pub struct WantsToRemoveItem {
+    pub item: Entity,
 }

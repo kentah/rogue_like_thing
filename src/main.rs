@@ -1,7 +1,7 @@
 //extern crate serde;
 use rltk::{GameState, Point, Rltk};
-use specs::prelude::*;
 use specs::saveload::{SimpleMarker, SimpleMarkerAllocator};
+use specs::{prelude::*, world};
 
 mod components;
 mod damage_system;
@@ -21,7 +21,7 @@ mod visibility_system;
 
 use components::*;
 use damage_system::DamageSystem;
-use inventory_system::{ItemCollectionSystem, ItemDropSystem, ItemUseSystem};
+use inventory_system::{ItemCollectionSystem, ItemDropSystem, ItemRemoveSystem, ItemUseSystem};
 use map::*;
 use map_indexing_system::MapIndexingSystem;
 use melee_combat_system::MeleeCombatSystem;
@@ -48,6 +48,8 @@ pub enum RunState {
     },
     SaveGame,
     NextLevel,
+    ShowRemoveItem,
+    GameOver,
 }
 
 pub struct State {
@@ -72,6 +74,9 @@ impl State {
         itemuse.run_now(&self.ecs);
         let mut drop_items = ItemDropSystem {};
         drop_items.run_now(&self.ecs);
+        let mut item_remove = ItemRemoveSystem {};
+        item_remove.run_now(&self.ecs);
+
         self.ecs.maintain();
     }
 }
@@ -82,6 +87,7 @@ impl State {
         let player = self.ecs.read_storage::<Player>();
         let backpack = self.ecs.read_storage::<InBackpack>();
         let player_entity = self.ecs.fetch::<Entity>();
+        let equipped = self.ecs.read_storage::<Equipped>();
 
         let mut to_delete: Vec<Entity> = Vec::new();
         for entity in entities.join() {
@@ -97,6 +103,13 @@ impl State {
             let bp = backpack.get(entity);
             if let Some(bp) = bp {
                 if bp.owner == *player_entity {
+                    should_delete = false;
+                }
+            }
+
+            let eq = equipped.get(entity);
+            if let Some(eq) = eq {
+                if eq.owner == *player_entity {
                     should_delete = false;
                 }
             }
@@ -161,6 +174,46 @@ impl State {
         let player_health = player_health_store.get_mut(*player_entity);
         if let Some(player_health) = player_health {
             player_health.hp = i32::max(player_health.hp, player_health.max_hp / 2);
+        }
+    }
+
+    fn game_over_cleanup(&mut self) {
+        // delete it all
+        let mut to_delete = Vec::new();
+        for e in self.ecs.entities().join() {
+            to_delete.push(e);
+        }
+        for del in to_delete.iter() {
+            self.ecs.delete_entity(*del).expect("Deleteion failed");
+        }
+
+        // build a new map and place player
+        let worldmap;
+        {
+            let mut worldmap_resource = self.ecs.write_resource::<Map>();
+            *worldmap_resource = Map::new_map_rooms_and_corridors(1);
+            worldmap = worldmap_resource.clone();
+        }
+
+        // spawn enemies
+        let (player_x, player_y) = worldmap.rooms[0].center();
+        let player_entity = spawner::player(&mut self.ecs, player_x, player_y);
+        let mut player_position = self.ecs.write_resource::<Point>();
+        *player_position = Point::new(player_x, player_y);
+        let mut position_components = self.ecs.write_storage::<Position>();
+        let mut player_entity_writer = self.ecs.write_resource::<Entity>();
+        *player_entity_writer = player_entity;
+        let player_pos_comp = position_components.get_mut(player_entity);
+        if let Some(player_pos_comp) = player_pos_comp {
+            player_pos_comp.x = player_x;
+            player_pos_comp.y = player_y;
+        }
+
+        // mark player's visibility
+        let mut viewshed_components = self.ecs.write_storage::<Viewshed>();
+        let vs = viewshed_components.get_mut(player_entity);
+        if let Some(vs) = vs {
+            vs.dirty = true;
         }
     }
 }
@@ -264,6 +317,24 @@ impl GameState for State {
                     }
                 }
             }
+            RunState::ShowRemoveItem => {
+                let result = gui::remove_item_menu(self, ctx);
+                match result.0 {
+                    gui::ItemMenuResult::Cancel => newrunstate = RunState::AwaitingInput,
+                    gui::ItemMenuResult::NoResponse => {}
+                    gui::ItemMenuResult::Selected => {
+                        let item_entity = result.1.unwrap();
+                        let mut intent = self.ecs.write_storage::<WantsToRemoveItem>();
+                        intent
+                            .insert(
+                                *self.ecs.fetch::<Entity>(),
+                                WantsToRemoveItem { item: item_entity },
+                            )
+                            .expect("Unable to insert intent");
+                        newrunstate = RunState::PlayerTurn;
+                    }
+                }
+            }
             RunState::ShowTargeting { range, item } => {
                 let result = gui::ranged_target(self, ctx, range);
                 match result.0 {
@@ -305,6 +376,18 @@ impl GameState for State {
                     },
                 }
             }
+            RunState::GameOver => {
+                let result = gui::game_over(ctx);
+                match result {
+                    gui::GameOverResult::NoSelection => {}
+                    gui::GameOverResult::QuitToMenu => {
+                        self.game_over_cleanup();
+                        newrunstate = RunState::MainMenu {
+                            menu_selection: gui::MainMenuSelection::NewGame,
+                        };
+                    }
+                }
+            }
             RunState::SaveGame => {
                 saveload_system::save_game(&mut self.ecs);
                 newrunstate = RunState::MainMenu {
@@ -322,22 +405,24 @@ impl GameState for State {
             *runwriter = newrunstate;
         }
         damage_system::delete_the_dead(&mut self.ecs);
-        draw_map(&self.ecs, ctx);
+        // damage_system::delete_the_dead(&mut self.ecs);
+        // draw_map(&self.ecs, ctx);
 
-        let positions = self.ecs.read_storage::<Position>();
-        let renderables = self.ecs.read_storage::<Renderable>();
-        let map = self.ecs.fetch::<Map>();
+        // let positions = self.ecs.read_storage::<Position>();
+        // let renderables = self.ecs.read_storage::<Renderable>();
+        // let map = self.ecs.fetch::<Map>();
 
-        let mut data = (&positions, &renderables).join().collect::<Vec<_>>();
-        data.sort_by(|&a, &b| b.1.render_order.cmp(&a.1.render_order));
-        for (pos, render) in data.iter() {
-            let idx = map.xy_idx(pos.x, pos.y);
-            if map.visible_tiles[idx] {
-                ctx.set(pos.x, pos.y, render.fg, render.bg, render.glyph);
-            }
-        }
+        // let mut data = (&positions, &renderables).join().collect::<Vec<_>>();
+        // data.sort_by(|&a, &b| b.1.render_order.cmp(&a.1.render_order));
+        // for (pos, render) in data.iter() {
+        //     let idx = map.xy_idx(pos.x, pos.y);
+        //     if map.visible_tiles[idx] {
+        //         ctx.set(pos.x, pos.y, render.fg, render.bg, render.glyph);
+        //     }
+        // }
 
-        gui::draw_ui(&self.ecs, ctx);
+        // gui::draw_ui(&self.ecs, ctx);
+        //}
     }
 }
 
@@ -372,6 +457,12 @@ fn main() -> rltk::BError {
     gs.ecs.register::<WantsToDropItem>();
     gs.ecs.register::<Confusion>();
     gs.ecs.register::<SimpleMarker<SerializeMe>>();
+    gs.ecs.register::<SerializationHelper>();
+    gs.ecs.register::<Equippable>();
+    gs.ecs.register::<Equipped>();
+    gs.ecs.register::<MeleePowerBonus>();
+    gs.ecs.register::<DefenseBonus>();
+    gs.ecs.register::<WantsToRemoveItem>();
 
     gs.ecs.insert(SimpleMarkerAllocator::<SerializeMe>::new());
 
@@ -389,7 +480,9 @@ fn main() -> rltk::BError {
     gs.ecs.insert(map);
     gs.ecs.insert(Point::new(player_x, player_y));
     gs.ecs.insert(player_entity);
-    gs.ecs.insert(RunState::PreRun);
+    gs.ecs.insert(RunState::MainMenu {
+        menu_selection: gui::MainMenuSelection::NewGame,
+    });
     gs.ecs.insert(gamelog::GameLog {
         entries: vec!["Welcome to Boring Dungeon".to_string()],
     });
