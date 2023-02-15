@@ -3,7 +3,7 @@ use rltk::{Point, Rltk, VirtualKeyCode, RGB};
 use specs::prelude::*;
 
 use crate::{
-    components::{CombatStats, InBackpack, Player, Viewshed},
+    components::{CombatStats, HungerClock, HungerState, InBackpack, Player, Viewshed},
     gamelog::GameLog,
     RunState,
 };
@@ -25,19 +25,10 @@ pub fn draw_ui(ecs: &World, ctx: &mut Rltk) {
         RGB::named(rltk::BLACK),
     );
 
-    let map = ecs.fetch::<Map>();
-    let depth = format!("Depth: {}", map.depth);
-    ctx.print_color(
-        2,
-        43,
-        RGB::named(rltk::YELLOW),
-        RGB::named(rltk::BLACK),
-        &depth,
-    );
-
     let combat_stats = ecs.read_storage::<CombatStats>();
     let players = ecs.read_storage::<Player>();
-    for (_player, stats) in (&players, &combat_stats).join() {
+    let hunger = ecs.read_storage::<HungerClock>();
+    for (_player, stats, hc) in (&players, &combat_stats, &hunger).join() {
         let health = format!(" HP: {} / {}", stats.hp, stats.max_hp);
         ctx.print_color(
             12,
@@ -56,7 +47,49 @@ pub fn draw_ui(ecs: &World, ctx: &mut Rltk) {
             RGB::named(rltk::RED),
             RGB::named(rltk::BLACK),
         );
+
+        // display hunger
+        match hc.state {
+            HungerState::WellFed => {
+                ctx.print_color(
+                    71,
+                    42,
+                    RGB::named(rltk::GREEN),
+                    RGB::named(rltk::BLACK),
+                    "Well-fed",
+                );
+            }
+            HungerState::Normal => {}
+            HungerState::Hungry => {
+                ctx.print_color(
+                    71,
+                    42,
+                    RGB::named(rltk::ORANGE),
+                    RGB::named(rltk::BLACK),
+                    "Hungry",
+                );
+            }
+            HungerState::Starving => {
+                ctx.print_color(
+                    71,
+                    42,
+                    RGB::named(rltk::RED),
+                    RGB::named(rltk::BLACK),
+                    "Starving",
+                );
+            }
+        }
     }
+
+    let map = ecs.fetch::<Map>();
+    let depth = format!("Depth: {}", map.depth);
+    ctx.print_color(
+        2,
+        43,
+        RGB::named(rltk::YELLOW),
+        RGB::named(rltk::BLACK),
+        &depth,
+    );
 
     let log = ecs.fetch::<GameLog>();
     let mut y = 44;

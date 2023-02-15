@@ -1,7 +1,12 @@
+use std::fmt::Write;
+
+use crate::components::HungerState;
+
 use super::{
-    gamelog::GameLog, AreaOfEffect, CombatStats, Confusion, Consumable, Equippable, Equipped,
-    InBackpack, InflictsDamage, Map, Name, Position, ProvidesHealing, SufferDamage,
-    WantsToDropItem, WantsToPickupItem, WantsToRemoveItem, WantsToUseItem,
+    gamelog::GameLog, particle_system::ParticleBuilder, AreaOfEffect, CombatStats, Confusion,
+    Consumable, Equippable, Equipped, HungerClock, InBackpack, InflictsDamage, Map, Name, Position,
+    ProvidesFood, ProvidesHealing, SufferDamage, WantsToDropItem, WantsToPickupItem,
+    WantsToRemoveItem, WantsToUseItem,
 };
 
 use specs::prelude::*;
@@ -66,8 +71,13 @@ impl<'a> System<'a> for ItemUseSystem {
         ReadStorage<'a, Equippable>,
         WriteStorage<'a, Equipped>,
         WriteStorage<'a, InBackpack>,
+        WriteExpect<'a, ParticleBuilder>,
+        ReadStorage<'a, Position>,
+        ReadStorage<'a, ProvidesFood>,
+        WriteStorage<'a, HungerClock>,
     );
 
+    #[allow(clippy::cognitive_complexity)]
     fn run(&mut self, data: Self::SystemData) {
         let (
             player_entity,
@@ -86,6 +96,10 @@ impl<'a> System<'a> for ItemUseSystem {
             equippable,
             mut equipped,
             mut backpack,
+            mut particle_builder,
+            positions,
+            provides_food,
+            mut hunger_clocks,
         ) = data;
 
         for (entity, useitem) in (&entities, &wants_use).join() {
@@ -127,6 +141,14 @@ impl<'a> System<'a> for ItemUseSystem {
                                 for mob in map.tile_content[idx].iter() {
                                     targets.push(*mob);
                                 }
+                                particle_builder.request(
+                                    tile_idx.x,
+                                    tile_idx.y,
+                                    rltk::RGB::named(rltk::ORANGE),
+                                    rltk::RGB::named(rltk::BLACK),
+                                    rltk::to_cp437('░'),
+                                    200.0,
+                                )
                             }
                         }
                     }
@@ -199,6 +221,17 @@ impl<'a> System<'a> for ItemUseSystem {
                                 ));
                             }
                             used_item = true;
+                            let pos = positions.get(*target);
+                            if let Some(pos) = pos {
+                                particle_builder.request(
+                                    pos.x,
+                                    pos.y,
+                                    rltk::RGB::named(rltk::MAGENTA),
+                                    rltk::RGB::named(rltk::BLACK),
+                                    rltk::to_cp437('♥'),
+                                    200.00,
+                                );
+                            }
                         }
                     }
                 }
@@ -219,6 +252,17 @@ impl<'a> System<'a> for ItemUseSystem {
                                 "You use {} on {}, inflicting {} hp",
                                 item_name.name, mob_name.name, damage.damage
                             ));
+                            let pos = positions.get(*mob);
+                            if let Some(pos) = pos {
+                                particle_builder.request(
+                                    pos.x,
+                                    pos.y,
+                                    rltk::RGB::named(rltk::MAGENTA),
+                                    rltk::RGB::named(rltk::BLACK),
+                                    rltk::to_cp437('‼'),
+                                    200.00,
+                                );
+                            }
                         }
                         used_item = true;
                     }
@@ -241,6 +285,18 @@ impl<'a> System<'a> for ItemUseSystem {
                                     "You use {} on {}, confusing them",
                                     item_name.name, mob_name.name
                                 ));
+
+                                let pos = positions.get(*mob);
+                                if let Some(pos) = pos {
+                                    particle_builder.request(
+                                        pos.x,
+                                        pos.y,
+                                        rltk::RGB::named(rltk::MAGENTA),
+                                        rltk::RGB::named(rltk::BLACK),
+                                        rltk::to_cp437('?'),
+                                        200.0,
+                                    );
+                                }
                             }
                         }
                     }
@@ -257,6 +313,25 @@ impl<'a> System<'a> for ItemUseSystem {
                 match consumable {
                     None => {}
                     Some(_) => entities.delete(useitem.item).expect("Delete failed"),
+                }
+            }
+
+            // eat edible items
+            let item_edible = provides_food.get(useitem.item);
+            match item_edible {
+                None => {}
+                Some(_) => {
+                    used_item = true;
+                    let target = targets[0];
+                    let hc = hunger_clocks.get_mut(target);
+                    if let Some(hc) = hc {
+                        hc.state = HungerState::WellFed;
+                        hc.duration = 20;
+                        gamelog.entries.push(format!(
+                            "You eat the {}",
+                            names.get(useitem.item).unwrap().name
+                        ));
+                    }
                 }
             }
         }
